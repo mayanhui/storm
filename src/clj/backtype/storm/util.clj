@@ -675,7 +675,7 @@
 (defn throw-runtime [& strs]
   (throw (RuntimeException. (apply str strs))))
 
-(defn redirect-stdio-to-log4j! []
+(defn redirect-stdio-to-slf4j! []
   ;; set-var-root doesn't work with *out* and *err*, so digging much deeper here
   ;; Unfortunately, this code seems to work at the REPL but not when spawned as worker processes
   ;; it might have something to do with being a child process
@@ -813,3 +813,13 @@
   (let [klass (if (string? klass) (Class/forName klass) klass)]
     (.newInstance klass)
     ))
+
+(defmacro -<>
+  ([x] x)
+  ([x form] (if (seq? form)
+              (with-meta
+                (let [[begin [_ & end]] (split-with #(not= % '<>) form)]
+                  (concat begin [x] end))
+                (meta form))
+              (list form x)))
+  ([x form & more] `(-<> (-<> ~x ~form) ~@more)))

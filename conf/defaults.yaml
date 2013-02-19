@@ -36,6 +36,8 @@ ui.port: 8080
 ui.childopts: "-Xmx768m"
 
 drpc.port: 3772
+drpc.worker.threads: 64
+drpc.queue.size: 128
 drpc.invocations.port: 3773
 drpc.request.timeout.secs: 600
 
@@ -50,7 +52,7 @@ supervisor.slots.ports:
     - 6701
     - 6702
     - 6703
-supervisor.childopts: "-Xmx1024m"
+supervisor.childopts: "-Xmx256m"
 #how long supervisor will wait to ensure that a worker process is started
 supervisor.worker.start.timeout.secs: 120
 #how long between heartbeats until supervisor considers that worker dead and tries to restart it
@@ -87,6 +89,7 @@ topology.max.task.parallelism: null
 topology.max.spout.pending: null
 topology.state.synchronization.timeout.secs: 60
 topology.stats.sample.rate: 0.05
+topology.builtin.metrics.bucket.size.secs: 60
 topology.fall.back.on.java.serialization: true
 topology.worker.childopts: null
 topology.executor.receive.buffer.size: 1024 #batched
@@ -101,7 +104,7 @@ topology.sleep.spout.wait.strategy.time.ms: 1
 topology.error.throttle.interval.secs: 10
 topology.max.error.report.per.interval: 5
 topology.kryo.factory: "backtype.storm.serialization.DefaultKryoFactory"
+topology.tuple.serializer: "backtype.storm.serialization.types.ListDelegateSerializer"
 topology.trident.batch.emit.interval.millis: 500
-
 
 dev.zookeeper.path: "/tmp/dev-storm-zookeeper"

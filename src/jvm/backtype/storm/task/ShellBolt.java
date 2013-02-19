@@ -14,7 +14,8 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
-import org.apache.log4j.Logger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.json.simple.JSONObject;
 
 /**
@@ -45,7 +46,7 @@ import org.json.simple.JSONObject;
  * </pre>
  */
 public class ShellBolt implements IBolt {
-    public static Logger LOG = Logger.getLogger(ShellBolt.class);
+    public static Logger LOG = LoggerFactory.getLogger(ShellBolt.class);
     Process _subprocess;
     OutputCollector _collector;
     Map<String, Tuple> _inputs = new ConcurrentHashMap<String, Tuple>();
@@ -97,6 +98,8 @@ public class ShellBolt implements IBolt {
                             handleAck(action);
                         } else if (command.equals("fail")) {
                             handleFail(action);
+                        } else if (command.equals("error")) {
+                            handleError(action);
                         } else if (command.equals("log")) {
                             String msg = (String) action.get("msg");
                             LOG.info("Shell msg: " + msg);
@@ -175,6 +178,11 @@ public class ShellBolt implements IBolt {
             throw new RuntimeException("Failed a non-existent or already acked/failed id: " + id);
         }
         _collector.fail(failed);
+    }
+
+    private void handleError(Map action) {
+        String msg = (String) action.get("msg");
+        _collector.reportError(new Exception("Shell Process Exception: " + msg));
     }
 
     private void handleEmit(Map action) throws InterruptedException {
