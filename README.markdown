@@ -62,6 +62,12 @@ You must not remove this notice, or any other, from this software.
 * Sergey Lukjanov ([@Frostman](https://github.com/Frostman))
 * Ross Feinstein ([@rnfein](https://github.com/rnfein))
 * Junichiro Takagi ([@tjun](https://github.com/tjun))
+* Bryan Peterson ([@Lazyshot](https://github.com/Lazyshot))
+* Sam Ritchie ([@sritchie](https://github.com/sritchie))
+* Stuart Anderson ([@emblem](https://github.com/emblem))
+* Robert Evans ([@revans2](https://github.com/revans2)) 
+* Andy Feng ([@anfeng](https://github.com/anfeng))
+* Lorcan Coyle ([@lorcan](https://github.com/lorcan))
 
 ## Acknowledgements
 

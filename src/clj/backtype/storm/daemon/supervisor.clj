@@ -20,11 +20,17 @@
   (shutdown-all-workers [this])
   )
 
+(defn- assignments-snapshot [storm-cluster-state callback]
+  (let [storm-ids (.assignments storm-cluster-state callback)]
+     (->> (dofor [sid storm-ids] {sid (.assignment-info storm-cluster-state sid callback)})
+          (apply merge)
+          (filter-val not-nil?)
+          )))
 
-(defn- read-my-executors [storm-cluster-state storm-id supervisor-id callback]
-  (let [assignment (.assignment-info storm-cluster-state storm-id callback)
-        my-executors (filter (fn [[_ [node _]]] (= node supervisor-id))
-                               (:executor->node+port assignment))
+(defn- read-my-executors [assignments-snapshot storm-id assignment-id]
+  (let [assignment (get assignments-snapshot storm-id)
+        my-executors (filter (fn [[_ [node _]]] (= node assignment-id))
+                           (:executor->node+port assignment))
         port-executors (apply merge-with
                           concat
                           (for [[executor [_ port]] my-executors]
@@ -34,29 +40,18 @@
                ;; need to cast to int b/c it might be a long (due to how yaml parses things)
                ;; doall is to avoid serialization/deserialization problems with lazy seqs
                [(Integer. port) (LocalAssignment. storm-id (doall executors))]
-               ))
-    ))
+               ))))
+
 
 (defn- read-assignments
   "Returns map from port to struct containing :storm-id and :executors"
-  [storm-cluster-state supervisor-id callback]
-  (let [storm-ids (.assignments storm-cluster-state callback)]
-    (apply merge-with
-           (fn [& ignored]
-             (throw (RuntimeException.
-                     "Should not have multiple topologies assigned to one port")))
-           (dofor [sid storm-ids] (read-my-executors storm-cluster-state sid supervisor-id callback))
-           )))
+  [assignments-snapshot assignment-id]
+  (->> (dofor [sid (keys assignments-snapshot)] (read-my-executors assignments-snapshot sid assignment-id))
+       (apply merge-with (fn [& ignored] (throw-runtime "Should not have multiple topologies assigned to one port")))))
 
 (defn- read-storm-code-locations
-  [storm-cluster-state callback]
-  (let [storm-ids (.assignments storm-cluster-state callback)]
-    (into {}
-      (dofor [sid storm-ids]
-        [sid (:master-code-dir (.assignment-info storm-cluster-state sid callback))]
-        ))
-    ))
-
+  [assignments-snapshot]
+  (map-val :master-code-dir assignments-snapshot))
 
 (defn- read-downloaded-storm-ids [conf]
   (map #(java.net.URLDecoder/decode %) (read-dir-contents (supervisor-stormdist-root conf)))
@@ -174,10 +169,12 @@
    :worker-thread-pids-atom (atom {})
    :storm-cluster-state (cluster/mk-storm-cluster-state conf)
    :local-state (supervisor-state conf)
-   :supervisor-id (.getId isupervisor)
+   :supervisor-id (.getSupervisorId isupervisor)
+   :assignment-id (.getAssignmentId isupervisor)
    :my-hostname (if (contains? conf STORM-LOCAL-HOSTNAME)
                   (conf STORM-LOCAL-HOSTNAME)
                   (local-hostname))
+   :curr-assignment (atom nil) ;; used for reporting used ports when heartbeating
    :timer (mk-timer :kill-fn (fn [t]
                                (log-error t "Error when processing event")
                                (halt-process! 20 "Error when processing an event")
@@ -263,12 +260,12 @@
           ^ISupervisor isupervisor (:isupervisor supervisor)
           ^LocalState local-state (:local-state supervisor)
           sync-callback (fn [& ignored] (.add event-manager this))
-          storm-code-map (read-storm-code-locations storm-cluster-state sync-callback)
+          assignments-snapshot (assignments-snapshot storm-cluster-state sync-callback)
+          storm-code-map (read-storm-code-locations assignments-snapshot)
           downloaded-storm-ids (set (read-downloaded-storm-ids conf))
           all-assignment (read-assignments
-                           storm-cluster-state
-                           (:supervisor-id supervisor)
-                           sync-callback)
+                           assignments-snapshot
+                           (:assignment-id supervisor))
           new-assignment (->> all-assignment
                               (filter-key #(.confirmAssigned isupervisor %)))
           assigned-storm-ids (assigned-storm-ids-from-port-assignments new-assignment)
@@ -306,6 +303,7 @@
       (.put local-state
             LS-LOCAL-ASSIGNMENTS
             new-assignment)
+      (reset! (:curr-assignment supervisor) new-assignment)
       ;; remove any downloaded code that's no longer assigned or active
       ;; important that this happens after setting the local assignment so that
       ;; synchronize-supervisor doesn't try to launch workers for which the
@@ -334,6 +332,9 @@
                                (:supervisor-id supervisor)
                                (SupervisorInfo. (current-time-secs)
                                                 (:my-hostname supervisor)
+                                                (:assignment-id supervisor)
+                                                (keys @(:curr-assignment supervisor))
+                                                ;; used ports
                                                 (.getMetadata isupervisor)
                                                 (conf SUPERVISOR-SCHEDULER-META)
                                                 ((:uptime supervisor)))))]
@@ -403,6 +404,7 @@
 (defmethod launch-worker
     :distributed [supervisor storm-id port worker-id]
     (let [conf (:conf supervisor)
+          storm-home (System/getProperty "storm.home")
           stormroot (supervisor-stormdist-root conf storm-id)
           stormjar (supervisor-stormjar-path stormroot)
           storm-conf (read-supervisor-storm-conf conf storm-id)
@@ -414,10 +416,10 @@
           command (str "java -server " childopts
                        " -Djava.library.path=" (conf JAVA-LIBRARY-PATH)
                        " -Dlogfile.name=" logfilename
-                       " -Dstorm.home=" (System/getProperty "storm.home")
-                       " -Dlog4j.configuration=storm.log.properties"
+                       " -Dstorm.home=" storm-home
+                       " -Dlogback.configurationFile=" storm-home "/logback/cluster.xml"
                        " -cp " classpath " backtype.storm.daemon.worker "
-                       (java.net.URLEncoder/encode storm-id) " " (:supervisor-id supervisor)
+                       (java.net.URLEncoder/encode storm-id) " " (:assignment-id supervisor)
                        " " port " " worker-id)]
       (log-message "Launching worker with command: " command)
       (launch-process command :environment {"LD_LIBRARY_PATH" (conf JAVA-LIBRARY-PATH)})
@@ -458,7 +460,7 @@
           worker (worker/mk-worker conf
                                    (:shared-context supervisor)
                                    storm-id
-                                   (:supervisor-id supervisor)
+                                   (:assignment-id supervisor)
                                    port
                                    worker-id)]
       (psim/register-process pid worker)
@@ -487,7 +489,9 @@
         true)
       (getMetadata [this]
         (doall (map int (get @conf-atom SUPERVISOR-SLOTS-PORTS))))
-      (getId [this]
+      (getSupervisorId [this]
+        @id-atom)
+      (getAssignmentId [this]
         @id-atom)
       (killedWorker [this port]
         )
